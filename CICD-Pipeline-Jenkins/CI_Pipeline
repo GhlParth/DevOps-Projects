@@ -1,0 +1,68 @@
+pipeline {
+    agent any
+    
+    tools {
+        jdk 'jdk11'
+        maven 'maven3'
+    }
+    
+    environment {
+        SCANNER_HOME= tool 'sonar-scanner'
+    }
+    
+    stages {
+        stage('Git checkout') {
+            steps {
+                git branch: 'main', changelog: false, poll: false, url: 'https://github.com/jaiswaladi2468/Shopping-Cart.git'
+            }
+        }
+        stage('Compile') {
+            steps {
+                sh "mvn clean compile"        
+            }
+        }
+        stage('Sonarqube Analysis') {
+            steps {
+                sh ''' $SCANNER_HOME/bin/sonar-scanner\
+                -Dsonar.host.url=http://<ec2-public-ip>:9000\
+                -Dsonar.login=<generate-access-token-docker-hub>\
+                -Dsonar.projectName=shopping-cart\
+                -Dsonar.java.binaries=.\
+                -Dsonar.projectKey=shopping-cart '''
+            }
+        }
+        stage('OWASP Scan') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --nvdApiKey=<your-nvd-api-key>', odcInstallation: 'dp' 
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        stage('Build Application') {
+            steps {
+                sh "mvn clean install -DskipTests=true"
+            }
+        }
+        stage('Build & Push Docker Image') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: '941817c7-1d41-4369-903e-904610fe4f14', toolName: 'docker') {
+                        sh "docker build -t shopping:latest -f docker/Dockerfile ."
+                        sh "docker tag shopping:latest <docker-hub-username>/shopping:latest"
+                        sh "docker push <docker-hub-Username>/shopping:latest"
+                    }
+                }
+            }
+        }
+        stage('Trigger cd pipeline') {
+            steps {
+                build job: "CD_pipeline", wait: true
+            }
+        }
+    }
+    post {
+        always {
+            echo "Pipeline completed — cleaning up workspace."
+            cleanWs()
+        }
+    }
+}
